@@ -1,16 +1,14 @@
 import { intro, isCancel, log, outro, select, text } from "@clack/prompts";
 import { getColoredStatus } from "./utils/statusColor.js";
-import type { Endpoints } from "@octokit/types";
-
-const GITHUB_API_BASE = "https://api.github.com";
-
-function handleCancel() {
-  log.warn("Operation cancelled.");
-  process.exit(0);
-}
-
-type ActionsRunsResponse =
-  Endpoints["GET /repos/{owner}/{repo}/actions/runs"]["response"]["data"];
+import { handleCancel } from "./utils/handle-cancel.js";
+import { getWorkflowRuns } from "./utils/get-workflow-runs.js";
+import { createRequestError } from "./utils/create-request-error.js";
+import {
+  GITHUB_API_BASE,
+  GITHUB_BASE_URL,
+} from "./domain/def/url-constants.js";
+import type { TWorkflowListResponse } from "./domain/meta/responses.js";
+import { RequestError } from "@octokit/request-error";
 
 // todo: as a user I want to use env variables to avoid entering repo url every time
 // REPO_URL="" node src/index.ts
@@ -33,13 +31,29 @@ async function getRunningActions() {
     handleCancel();
     return;
   }
-  // todo: no casting. if fullRepoUrl is not string. send immediate feedback to user
-  const repoPath = (fullRepoUrl as string).split("https://github.com/")[1];
+
+  //Check if valid github repo url
+  if (
+    typeof fullRepoUrl !== "string" ||
+    !fullRepoUrl.includes(GITHUB_BASE_URL)
+  ) {
+    log.error("Invalid repository URL.");
+    process.exit(1);
+  }
+
+  const repoPath = fullRepoUrl.split(`${GITHUB_BASE_URL}/`)[1];
+
   try {
     const getWorkflows = await fetch(
       `${GITHUB_API_BASE}/repos/${repoPath}/actions/workflows`
     );
-    const workflowsResponse = await getWorkflows.json();
+    
+    if (!getWorkflows.ok) {
+      throw await createRequestError(getWorkflows);
+    }
+    
+    const workflowsResponse =
+      (await getWorkflows.json()) as TWorkflowListResponse;
 
     // Handle case with no workflows
     if (workflowsResponse.workflows.length === 0) {
@@ -48,14 +62,12 @@ async function getRunningActions() {
     }
 
     const workflowOptions = [
-      // todo: do not use any.
-      ...workflowsResponse.workflows?.map((workflow: any) => ({
+      { value: -1, label: "All Workflows" },
+      ...workflowsResponse.workflows?.map((workflow) => ({
         value: workflow.id,
         label: workflow.name,
       })),
     ];
-    // todo: why unshift when you can just put the object as first element in the array initialization
-    workflowOptions.unshift({ value: "all", label: "All Workflows" });
 
     const workflow = await select({
       message: "Select Workflow:",
@@ -67,18 +79,8 @@ async function getRunningActions() {
       return;
     }
 
-    // todo: create a function outside of this one that returns the runs response {runs, totalCount}
-    const workflowsRunsUrl =
-      workflow === "all"
-        ? `${GITHUB_API_BASE}/repos/${repoPath}/actions/runs`
-        : `${GITHUB_API_BASE}/repos/${repoPath}/actions/workflows/${workflow}/runs`;
-
-    const runsResponse = await fetch(workflowsRunsUrl);
-
-    const response: ActionsRunsResponse = await runsResponse.json();
-
-    const totalCount = response.total_count;
-    const runs = response.workflow_runs;
+    const { total_count: totalCount, workflow_runs: runs } =
+      await getWorkflowRuns(workflow, repoPath);
 
     // Handle case with no running actions
     if (runs.length === 0) {
@@ -95,20 +97,25 @@ async function getRunningActions() {
       log.message(`   Started: ${new Date(run.created_at).toLocaleString()}`);
       log.message(`   URL: ${run.html_url}\n`);
     });
-  } catch (error: any) {
-    // todo: replace any with type check. use typescript type check and/or type assertion
-    if (error?.status === 404) {
-      log.error(`\n✗ Repository not found: ${repoPath}\n`);
-    } else if (error?.status === 403) {
-      log.error(`\n✗ API rate limit exceeded. Try again later.\n`);
-    } else {
+  } catch (error: unknown) {
+    if (error instanceof RequestError) {
+      if (error.status === 404) {
+        log.error(`\n✗ Repository not found: ${repoPath}\n`);
+      } else if (error.status === 403) {
+        log.error(`\n✗ API rate limit exceeded. Try again later.\n`);
+      } else if (error.status === 401) {
+        log.error(`\n✗ Authentication required. Please check your credentials.\n`);
+      } else {
+        log.error(`\n✗ API Error (${error.status}): ${error.message}\n`);
+      }
+    } else if (error instanceof Error) {
       log.error(`\n✗ Error: ${error.message}\n`);
+    } else {
+      log.error(`\n✗ Unknown error occurred\n`);
     }
     process.exit(1);
   }
   outro("Thank you for using the running github actions cli!");
 }
 
-// todo: use top level await
-getRunningActions();
-
+await getRunningActions();
