@@ -7,8 +7,10 @@ import {
   GITHUB_API_BASE,
   GITHUB_BASE_URL,
 } from "./domain/def/url-constants.js";
-import type { TWorkflowListResponse } from "./domain/meta/responses.js";
 import { RequestError } from "@octokit/request-error";
+import type { TWorkflowListResponse } from "./domain/meta/responses.js";
+
+import "dotenv/config";
 
 // todo: as a user I want to use env variables to avoid entering repo url every time
 // REPO_URL="" node src/index.ts
@@ -21,15 +23,26 @@ import { RequestError } from "@octokit/request-error";
 async function getRunningActions() {
   intro("Running github actions cli..");
 
-  const fullRepoUrl = await text({
-    message: "Enter your Repository URL to get running actions",
-    validate(value) {
-      if (value.length === 0) return `URL is required!`;
-    },
-  });
-  if (isCancel(fullRepoUrl)) {
-    handleCancel();
-    return;
+  const envRepoUrl = process.env.REPO_URL;
+
+  let fullRepoUrl: string;
+
+  if (envRepoUrl) {
+    log.info(`Using REPO_URL from environment: ${envRepoUrl}`);
+    fullRepoUrl = envRepoUrl;
+  } else {
+    const promptResult = await text({
+      message: "Enter your Repository URL to get running actions",
+      validate(value) {
+        if (value.length === 0) return `URL is required!`;
+      },
+    });
+
+    if (isCancel(promptResult)) {
+      handleCancel();
+      return;
+    }
+    fullRepoUrl = promptResult as string;
   }
 
   //Check if valid github repo url
@@ -47,11 +60,10 @@ async function getRunningActions() {
     const getWorkflows = await fetch(
       `${GITHUB_API_BASE}/repos/${repoPath}/actions/workflows`
     );
-    
     if (!getWorkflows.ok) {
       throw await createRequestError(getWorkflows);
     }
-    
+
     const workflowsResponse =
       (await getWorkflows.json()) as TWorkflowListResponse;
 
@@ -104,7 +116,9 @@ async function getRunningActions() {
       } else if (error.status === 403) {
         log.error(`\n✗ API rate limit exceeded. Try again later.\n`);
       } else if (error.status === 401) {
-        log.error(`\n✗ Authentication required. Please check your credentials.\n`);
+        log.error(
+          `\n✗ Authentication required. Please check your credentials.\n`
+        );
       } else {
         log.error(`\n✗ API Error (${error.status}): ${error.message}\n`);
       }
