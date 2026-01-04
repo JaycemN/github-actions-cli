@@ -12,12 +12,6 @@ import type { TWorkflowListResponse } from "./domain/meta/responses.js";
 
 import "dotenv/config";
 
-// todo: as a user I want to use env variables to avoid entering repo url every time
-// REPO_URL="" node src/index.ts
-// if process.env.REPO_URL is set use that value instead of prompting the user
-
-// todo: as a user I want to see tree of workflows with runs if I select all
-
 // todo: as a user I want the script to keep running if there is a workflow that have "running/inprgress" run with loading spinner
 
 async function getRunningActions() {
@@ -99,16 +93,47 @@ async function getRunningActions() {
       log.info(`No running actions found on ${repoPath}.`);
       process.exit(0);
     }
-    log.info(`Found ${totalCount} running actions on ${repoPath}:\n`);
-    runs.forEach((run, idx) => {
-      const coloredStatus = getColoredStatus(run.status, run.conclusion);
-      log.step(`${idx + 1}. ${run.name}`);
-      log.message(`   Status: ${coloredStatus}`);
-      log.message(`   Branch: ${run.head_branch}`);
-      log.message(`   Commit: ${run.head_sha.slice(0, 7)}`);
-      log.message(`   Started: ${new Date(run.created_at).toLocaleString()}`);
-      log.message(`   URL: ${run.html_url}\n`);
-    });
+
+    // If "All Workflows" selected, display as a tree grouped by workflow
+    if (workflow === -1) {
+      log.info(`Found ${totalCount} running actions on ${repoPath}:\n`);
+
+      // Group runs by workflow name
+      const runsByWorkflow = runs.reduce((acc, run) => {
+        const workflowName = run.name || "Unknown Workflow";
+        if (!acc[workflowName]) {
+          acc[workflowName] = [];
+        }
+        acc[workflowName].push(run);
+        return acc;
+      }, {} as Record<string, typeof runs>);
+
+      // Display as tree
+      Object.entries(runsByWorkflow).forEach(([workflowName, workflowRuns]) => {
+        log.step(`📋 ${workflowName} (${workflowRuns.length} runs)`);
+        workflowRuns.forEach(run => {
+          const coloredStatus = getColoredStatus(run.status, run.conclusion);
+          log.message(`   ${"├─"} Run #${run.run_number}`);
+          log.message(`   ${"│"} Status: ${coloredStatus}`);
+          log.message(`   ${"│"} Branch: ${run.head_branch}`);
+          log.message(`   ${"│"} Commit: ${run.head_sha.slice(0, 7)}`);
+          log.message(`   ${"│"} Started: ${new Date(run.created_at).toLocaleString()}`);
+          log.message(`   ${"│"} URL: ${run.html_url}\n`);
+        });
+      });
+    } else {
+      // Single workflow selected - show flat list
+      log.info(`Found ${totalCount} running actions on ${repoPath}:\n`);
+      runs.forEach((run, idx) => {
+        const coloredStatus = getColoredStatus(run.status, run.conclusion);
+        log.step(`${idx + 1}. ${run.name}`);
+        log.message(`   Status: ${coloredStatus}`);
+        log.message(`   Branch: ${run.head_branch}`);
+        log.message(`   Commit: ${run.head_sha.slice(0, 7)}`);
+        log.message(`   Started: ${new Date(run.created_at).toLocaleString()}`);
+        log.message(`   URL: ${run.html_url}\n`);
+      });
+    }
   } catch (error: unknown) {
     if (error instanceof RequestError) {
       if (error.status === 404) {
